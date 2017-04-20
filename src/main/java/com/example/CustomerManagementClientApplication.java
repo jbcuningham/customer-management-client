@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cloud.client.circuitbreaker.EnableCircuitBreaker;
 import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
+import org.springframework.cloud.netflix.feign.EnableFeignClients;
 import org.springframework.cloud.netflix.zuul.EnableZuulProxy;
 import org.springframework.cloud.stream.annotation.EnableBinding;
 import org.springframework.cloud.stream.messaging.Source;
@@ -28,9 +29,7 @@ import java.util.Collection;
 import java.util.stream.Collectors;
 
 @EnableZuulProxy
-@EnableBinding(Source.class)
-@EnableDiscoveryClient
-@EnableCircuitBreaker
+@EnableFeignClients
 @SpringBootApplication
 public class CustomerManagementClientApplication {
 
@@ -43,58 +42,70 @@ public class CustomerManagementClientApplication {
     public static void main(String[] args) {
         SpringApplication.run(CustomerManagementClientApplication.class, args);
     }
+}
 
-    @RestController
-    @RequestMapping("/customers")
-    class CustomerApiGatewayRestController {
+@EnableDiscoveryClient
+@EnableBinding(Source.class)
+@RestController
+@RequestMapping("/customers")
+@EnableCircuitBreaker
+class CustomerApiGatewayRestController {
 
-        private final RestTemplate restTemplate;
+    @Autowired
+    private Source outputChannelSource;
 
-        @Autowired
-        public CustomerApiGatewayRestController(RestTemplate restTemplate) {
-            this.restTemplate = restTemplate;
-        }
+    private final RestTemplate restTemplate;
 
-        public Collection<String> fallback() {
-            return new ArrayList<>();
-        }
+    @RequestMapping(method = RequestMethod.POST)
+    public void write(@RequestBody Customer customer) {
+        MessageChannel channel = this.outputChannelSource.output();
+        channel.send(
+                MessageBuilder.withPayload(customer).build()
+        );
+    }
 
-        private Source outputChannelSource;
+    public Collection<String> fallback() {
+        return new ArrayList<>();
+    }
 
-        @Autowired
-        @RequestMapping(method = RequestMethod.POST)
-        public void write(@RequestBody Customer cn) {
-            MessageChannel channel = this.outputChannelSource.output();
-            channel.send(
-                    MessageBuilder.withPayload(cn.getCustomerName()).build()
-            );
-        }
+    @Autowired
+    public CustomerApiGatewayRestController(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
 
-        @HystrixCommand(fallbackMethod = "fallback")
-        @RequestMapping(method = RequestMethod.GET, value = "/names")
-        public Collection<String> names() {
-            return this.restTemplate.exchange("http://customer-management-service/customers/",
-                    HttpMethod.GET,
-                    null,
-                    new ParameterizedTypeReference<Resources<Customer>>() {
-                    })
-                    .getBody()
-                    .getContent()
-                    .stream()
-                    .map(Customer::getCustomerName)
-                    .collect(Collectors.toList());
-        }
+
+    @HystrixCommand(fallbackMethod = "fallback")
+    @RequestMapping(method = RequestMethod.GET)
+    public Collection<String> names() {
+        return this.restTemplate.exchange("http://customer-management-service/customers/",
+                HttpMethod.GET,
+                null,
+                new ParameterizedTypeReference<Resources<Customer>>() {
+                })
+                .getBody()
+                .getContent()
+                .stream()
+                .map(Customer::getCustomerName)
+                .collect(Collectors.toList());
     }
 }
 
-    class Customer {
-        private String customerName;
 
-        public String getCustomerName() {
-            return customerName;
-        }
+class Customer {
+    private String customerName;
 
-        public Customer(String customerName) {
-            this.customerName = customerName;
-        }
+    public Customer() {
     }
+
+    public Customer(String customerName) {
+        this.customerName = customerName;
+    }
+
+    public String getCustomerName() {
+        return customerName;
+    }
+
+    public void setCustomerName(String customerName) {
+        this.customerName = customerName;
+    }
+}
